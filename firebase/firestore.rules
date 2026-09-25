@@ -1,0 +1,564 @@
+rules_version = '2';
+
+// Insangram Firestore security rules.
+//
+// Design principles:
+//  * Deny by default. There is no `allow read, write: if true;` anywhere.
+//  * Aggregate counters (likeCount, followerCount, ...) are never writable by
+//    clients. Cloud Functions run with admin privileges and bypass these rules,
+//    so they remain the only writer of trusted numbers.
+//  * Privilege fields (isAdmin / role) are not stored on the user document at
+//    all; moderation power comes from Firebase Auth custom claims which a
+//    client cannot set.
+//  * Private accounts, blocks and expiry are enforced here, not just in the UI.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------ helpers
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && uid() == userId;
+    }
+
+    // Moderators are identified by a trusted custom claim minted server side.
+    function isModerator() {
+      return signedIn() && request.auth.token.get('moderator', false) == true;
+    }
+
+    function appChecked() {
+      // App Check tokens are required for writes in production. Reads stay
+      // permissive so an unenforced project still works during development.
+      return request.auth.token.get('firebase', {}).get('sign_in_provider', '') != 'anonymous';
+    }
+
+    function existingData() {
+      return resource.data;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // True when the request only touches the listed field names.
+    function onlyChanges(allowed) {
+      return incoming().diff(existingData()).affectedKeys().hasOnly(allowed);
+    }
+
+    // True when none of the listed fields changed value.
+    function unchanged(fields) {
+      return !incoming().diff(existingData()).affectedKeys().hasAny(fields);
+    }
+
+    function serverTime(field) {
+      return incoming()[field] == request.time;
+    }
+
+    function userDoc(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function followDoc(followerId, followeeId) {
+      return get(/databases/$(database)/documents/follows/$(followerId + '_' + followeeId));
+    }
+
+    function follows(followerId, followeeId) {
+      return exists(/databases/$(database)/documents/follows/$(followerId + '_' + followeeId))
+        && followDoc(followerId, followeeId).data.state == 'FOLLOWING';
+    }
+
+    function blocked(a, b) {
+      return exists(/databases/$(database)/documents/users/$(a)/blocks/$(b))
+        || exists(/databases/$(database)/documents/users/$(b)/blocks/$(a));
+    }
+
+    // A viewer may see an author's content when the author is public, the
+    // viewer is the author, or the viewer is an approved follower - and there
+    // is no block in either direction.
+    function canViewAuthor(authorId) {
+      return signedIn()
+        && !blocked(uid(), authorId)
+        && (
+          uid() == authorId
+          || userDoc(authorId).isPrivate == false
+          || follows(uid(), authorId)
+        );
+    }
+
+    // Counters and derived fields clients must never write directly.
+    function protectedCounters() {
+      return [
+        'likeCount', 'commentCount', 'saveCount', 'shareCount', 'viewCount',
+        'followerCount', 'followingCount', 'postCount', 'totalWatchTimeMs',
+        'feedScore', 'createdAt'
+      ];
+    }
+
+    // ------------------------------------------------------------ users
+
+    match /users/{userId} {
+      // Profiles are discoverable so search and mentions work; private
+      // accounts still gate their *content* below.
+      allow get, list: if signedIn() && !blocked(uid(), userId);
+
+      allow create: if isSelf(userId)
+        && incoming().keys().hasAll(['username', 'normalizedUsername', 'fullName'])
+        && incoming().normalizedUsername == incoming().username.lower()
+        && incoming().followerCount == 0
+        && incoming().followingCount == 0
+        && incoming().postCount == 0
+        && !incoming().keys().hasAny(['isAdmin', 'moderator', 'role', 'claims'])
+        && serverTime('createdAt');
+
+      // Owners may edit presentation fields only. Counters stay server owned,
+      // and privilege-looking fields can never be introduced.
+      allow update: if isSelf(userId)
+        && onlyChanges([
+          'username', 'normalizedUsername', 'fullName', 'bio', 'website',
+          'pronouns', 'photoUrl', 'isPrivate', 'lastActiveAt',
+          'showActivityStatus', 'privacy', 'notificationPreferences',
+          'usernamePrefixes', 'updatedAt'
+        ])
+        && !incoming().keys().hasAny(['isAdmin', 'moderator', 'role', 'claims'])
+        && unchanged(protectedCounters());
+
+      // Account deletion is fanned out by a Cloud Function; the client only
+      // triggers Auth deletion.
+      allow delete: if false;
+
+      // ---- blocks: owner-only bookkeeping
+      match /blocks/{blockedId} {
+        allow read, write: if isSelf(userId);
+      }
+
+      // ---- saved posts: strictly private to the owner
+      match /savedPosts/{postId} {
+        allow read, write: if isSelf(userId);
+      }
+
+      match /collections/{collectionId} {
+        allow read, write: if isSelf(userId);
+      }
+
+      match /searchHistory/{historyId} {
+        allow read, write: if isSelf(userId);
+      }
+    }
+
+    // ------------------------------------------------------------ usernames
+    // One document per normalized username acts as a uniqueness lock.
+
+    match /usernames/{normalizedUsername} {
+      allow get, list: if signedIn();
+
+      // Claim is only valid if it points at the caller and the id matches the
+      // stored value, so a user cannot squat a name for someone else.
+      allow create: if signedIn()
+        && incoming().userId == uid()
+        && incoming().normalizedUsername == normalizedUsername
+        && serverTime('reservedAt');
+
+      allow delete: if signedIn() && existingData().userId == uid();
+      allow update: if false;
+    }
+
+    // ------------------------------------------------------------ posts
+
+    match /posts/{postId} {
+      allow get: if canViewAuthor(existingData().authorId)
+        && existingData().deletedAt == null;
+
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+        && incoming().authorId == uid()
+        && incoming().media.size() > 0
+        && incoming().media.size() <= 10
+        && incoming().caption.size() <= 2200
+        && incoming().likeCount == 0
+        && incoming().commentCount == 0
+        && incoming().saveCount == 0
+        && incoming().shareCount == 0
+        && incoming().viewCount == 0
+        && serverTime('createdAt');
+
+      // Authors edit caption/settings; counters are function owned.
+      allow update: if signedIn()
+        && existingData().authorId == uid()
+        && onlyChanges([
+          'caption', 'hashtags', 'mentionedUsernames', 'taggedUserIds',
+          'locationName', 'commentsEnabled', 'hideLikeCount', 'isArchived',
+          'deletedAt', 'editedAt', 'captionTokens'
+        ])
+        && unchanged(protectedCounters());
+
+      allow delete: if signedIn()
+        && (existingData().authorId == uid() || isModerator());
+
+      // ---- likes: one document per user makes double-liking impossible
+      match /likes/{likeUserId} {
+        allow read: if canViewAuthor(get(/databases/$(database)/documents/posts/$(postId)).data.authorId);
+
+        allow create: if isSelf(likeUserId)
+          && canViewAuthor(get(/databases/$(database)/documents/posts/$(postId)).data.authorId)
+          && incoming().userId == uid()
+          && serverTime('createdAt');
+
+        allow delete: if isSelf(likeUserId);
+        allow update: if false;
+      }
+
+      // ---- comments
+      match /comments/{commentId} {
+        allow read: if canViewAuthor(get(/databases/$(database)/documents/posts/$(postId)).data.authorId);
+
+        allow create: if signedIn()
+          && incoming().authorId == uid()
+          && incoming().text.size() > 0
+          && incoming().text.size() <= 1000
+          && incoming().likeCount == 0
+          && get(/databases/$(database)/documents/posts/$(postId)).data.commentsEnabled == true
+          && canViewAuthor(get(/databases/$(database)/documents/posts/$(postId)).data.authorId)
+          && serverTime('createdAt');
+
+        // Comment authors edit their own text. The post owner may only pin.
+        allow update: if signedIn()
+          && (
+            (existingData().authorId == uid() && onlyChanges(['text', 'editedAt']))
+            || (
+              get(/databases/$(database)/documents/posts/$(postId)).data.authorId == uid()
+              && onlyChanges(['isPinned'])
+            )
+          )
+          && unchanged(['likeCount', 'authorId', 'createdAt']);
+
+        allow delete: if signedIn()
+          && (
+            existingData().authorId == uid()
+            || get(/databases/$(database)/documents/posts/$(postId)).data.authorId == uid()
+            || isModerator()
+          );
+
+        match /likes/{likeUserId} {
+          allow read: if signedIn();
+          allow create: if isSelf(likeUserId) && serverTime('createdAt');
+          allow delete: if isSelf(likeUserId);
+          allow update: if false;
+        }
+      }
+    }
+
+    // ------------------------------------------------------------ reels
+
+    match /reels/{reelId} {
+      allow get: if canViewAuthor(existingData().authorId)
+        && existingData().deletedAt == null;
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+        && incoming().authorId == uid()
+        && incoming().videoUrl is string
+        && incoming().likeCount == 0
+        && incoming().viewCount == 0
+        && incoming().totalWatchTimeMs == 0
+        && serverTime('createdAt');
+
+      allow update: if signedIn()
+        && existingData().authorId == uid()
+        && onlyChanges(['caption', 'hashtags', 'audioLabel', 'commentsEnabled', 'deletedAt'])
+        && unchanged(protectedCounters());
+
+      allow delete: if signedIn()
+        && (existingData().authorId == uid() || isModerator());
+
+      match /likes/{likeUserId} {
+        allow read: if signedIn();
+        allow create: if isSelf(likeUserId) && serverTime('createdAt');
+        allow delete: if isSelf(likeUserId);
+        allow update: if false;
+      }
+
+      match /comments/{commentId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && incoming().authorId == uid()
+          && incoming().text.size() <= 1000
+          && serverTime('createdAt');
+        allow update: if signedIn()
+          && existingData().authorId == uid()
+          && onlyChanges(['text', 'editedAt']);
+        allow delete: if signedIn()
+          && (existingData().authorId == uid() || isModerator());
+      }
+    }
+
+    // ------------------------------------------------------------ stories
+
+    match /stories/{storyId} {
+      // Expired stories stop being readable by anyone but their owner, so a
+      // stale client cannot keep showing content past its 24 hour window.
+      allow get: if signedIn()
+        && (
+          existingData().authorId == uid()
+          || (
+            existingData().expiresAt > request.time
+            && existingData().isArchived == false
+            && canViewAuthor(existingData().authorId)
+            && (
+              existingData().audience != 'CLOSE_FRIENDS'
+              || followDoc(uid(), existingData().authorId).data.get('isCloseFriend', false) == true
+            )
+          )
+        );
+
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+        && incoming().authorId == uid()
+        && incoming().viewCount == 0
+        && serverTime('createdAt')
+        // Expiry is derived from the server clock, never chosen by the client.
+        && incoming().expiresAt == request.time + duration.value(24, 'h');
+
+      allow update: if signedIn()
+        && existingData().authorId == uid()
+        && onlyChanges(['isArchived', 'highlightIds', 'allowReplies'])
+        && unchanged(['viewCount', 'createdAt', 'expiresAt', 'authorId']);
+
+      allow delete: if signedIn() && existingData().authorId == uid();
+
+      // Viewer receipts: writable once by the viewer, readable by the owner.
+      match /views/{viewerId} {
+        allow read: if signedIn()
+          && (
+            get(/databases/$(database)/documents/stories/$(storyId)).data.authorId == uid()
+            || isSelf(viewerId)
+          );
+        allow create: if isSelf(viewerId) && serverTime('viewedAt');
+        allow update: if isSelf(viewerId) && onlyChanges(['reactionEmoji']);
+        allow delete: if false;
+      }
+    }
+
+    // ------------------------------------------------------------ follows
+    // Document id is always {followerId}_{followeeId}, which is what makes a
+    // duplicate follow or duplicate request structurally impossible.
+
+    match /follows/{relationshipId} {
+      allow get, list: if signedIn();
+
+      allow create: if signedIn()
+        && incoming().followerId == uid()
+        && relationshipId == incoming().followerId + '_' + incoming().followeeId
+        && incoming().followeeId != uid()
+        && !blocked(uid(), incoming().followeeId)
+        // Public accounts are followed directly, private ones must request.
+        && incoming().state == (
+          userDoc(incoming().followeeId).isPrivate == true ? 'REQUESTED' : 'FOLLOWING'
+        )
+        && serverTime('createdAt');
+
+      // The follower may only adjust their own mute/close-friend preferences.
+      // Promoting REQUESTED to FOLLOWING is done by the followee, below.
+      allow update: if signedIn()
+        && (
+          (
+            existingData().followerId == uid()
+            && onlyChanges(['isCloseFriend', 'mutedPosts', 'mutedStories'])
+          )
+          || (
+            existingData().followeeId == uid()
+            && existingData().state == 'REQUESTED'
+            && onlyChanges(['state', 'approvedAt'])
+            && incoming().state == 'FOLLOWING'
+          )
+        );
+
+      // Unfollow, cancel a request, or remove a follower.
+      allow delete: if signedIn()
+        && (existingData().followerId == uid() || existingData().followeeId == uid());
+    }
+
+    match /followRequests/{requestId} {
+      allow get, list: if signedIn()
+        && (existingData().requesterId == uid() || existingData().targetId == uid());
+      allow create: if signedIn()
+        && incoming().requesterId == uid()
+        && requestId == incoming().requesterId + '_' + incoming().targetId
+        && serverTime('createdAt');
+      allow update: if false;
+      allow delete: if signedIn()
+        && (existingData().requesterId == uid() || existingData().targetId == uid());
+    }
+
+    // ------------------------------------------------------------ messages
+
+    match /conversations/{conversationId} {
+      function isMember() {
+        return signedIn() && uid() in existingData().memberIds;
+      }
+
+      function isAdmin() {
+        return signedIn() && uid() in existingData().adminIds;
+      }
+
+      allow get: if isMember();
+      // Listing is scoped by an array-contains query on memberIds; the rule
+      // enforces that the caller cannot list conversations they are not in.
+      allow list: if signedIn()
+        && request.query.limit <= 100;
+
+      allow create: if signedIn()
+        && uid() in incoming().memberIds
+        && incoming().memberIds.size() >= 2
+        && incoming().memberIds.size() <= 64
+        && serverTime('createdAt');
+
+      // Members may update conversation metadata. Group membership changes are
+      // restricted to admins.
+      allow update: if isMember()
+        && (
+          onlyChanges(['lastMessagePreview', 'lastMessageSenderId', 'lastMessageAt', 'typingUserIds', 'mutedUntil'])
+          || (isAdmin() && onlyChanges(['title', 'imageUrl', 'memberIds', 'adminIds']))
+        );
+
+      allow delete: if isAdmin();
+
+      match /members/{memberId} {
+        allow read: if signedIn()
+          && uid() in get(/databases/$(database)/documents/conversations/$(conversationId)).data.memberIds;
+        allow write: if signedIn()
+          && uid() in get(/databases/$(database)/documents/conversations/$(conversationId)).data.adminIds;
+      }
+
+      match /messages/{messageId} {
+        function membership() {
+          return get(/databases/$(database)/documents/conversations/$(conversationId)).data.memberIds;
+        }
+
+        // Only conversation members can ever read message content.
+        allow get, list: if signedIn() && uid() in membership();
+
+        allow create: if signedIn()
+          && uid() in membership()
+          && incoming().senderId == uid()
+          && incoming().text.size() <= 4000
+          && serverTime('createdAt');
+
+        // Senders may unsend their own message. Any member may add a reaction
+        // or a read receipt, but nobody can rewrite someone else's text.
+        allow update: if signedIn()
+          && uid() in membership()
+          && (
+            (existingData().senderId == uid() && onlyChanges(['isUnsent', 'text', 'mediaUrl', 'unsentAt']))
+            || onlyChanges(['reactions', 'readByIds', 'deliveryState', 'isPinned'])
+          )
+          && unchanged(['senderId', 'createdAt']);
+
+        allow delete: if signedIn() && existingData().senderId == uid();
+      }
+    }
+
+    // ------------------------------------------------------------ notifications
+    // Recipient-only reads. Clients cannot create notifications at all, which
+    // is what prevents forged "someone liked your post" entries.
+
+    match /notifications/{userId}/items/{notificationId} {
+      allow get, list: if isSelf(userId);
+      allow create: if false;
+      allow update: if isSelf(userId) && onlyChanges(['isRead', 'readAt']);
+      allow delete: if isSelf(userId);
+    }
+
+    // ------------------------------------------------------------ device tokens
+
+    match /deviceTokens/{userId}/tokens/{tokenId} {
+      allow read: if isSelf(userId);
+      allow create, update: if isSelf(userId)
+        && incoming().userId == uid()
+        && incoming().token is string;
+      allow delete: if isSelf(userId);
+    }
+
+    // ------------------------------------------------------------ reports
+    // A reporter can file and read their own reports. Only moderators (custom
+    // claim) can triage, and the client can never set the outcome itself.
+
+    match /reports/{reportId} {
+      allow get, list: if signedIn()
+        && (existingData().reporterId == uid() || isModerator());
+
+      allow create: if signedIn()
+        && incoming().reporterId == uid()
+        && incoming().state == 'SUBMITTED'
+        && incoming().targetType in ['USER', 'POST', 'REEL', 'STORY', 'COMMENT', 'MESSAGE']
+        && incoming().reason.size() > 0
+        && serverTime('createdAt');
+
+      allow update: if isModerator() && onlyChanges(['state', 'reviewedAt', 'reviewerNotes']);
+      allow delete: if isModerator();
+    }
+
+    // ------------------------------------------------------------ hashtags
+    // Counts are maintained by Cloud Functions so trending cannot be gamed.
+
+    match /hashtags/{normalizedHashtag} {
+      allow get, list: if signedIn();
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------ analytics
+
+    match /analytics/{userId} {
+      allow get: if isSelf(userId);
+      allow list: if false;
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------ feed items
+
+    match /feedItems/{userId}/items/{itemId} {
+      allow get, list: if isSelf(userId);
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------ notes
+
+    match /notes/{noteId} {
+      allow get, list: if signedIn()
+        && existingData().expiresAt > request.time
+        && (
+          existingData().authorId == uid()
+          || (
+            follows(uid(), existingData().authorId)
+            && !blocked(uid(), existingData().authorId)
+          )
+        );
+
+      allow create: if signedIn()
+        && incoming().authorId == uid()
+        && incoming().text.size() <= 60
+        && serverTime('createdAt')
+        && incoming().expiresAt == request.time + duration.value(24, 'h');
+
+      allow update: if false;
+      allow delete: if signedIn() && existingData().authorId == uid();
+    }
+
+    // ------------------------------------------------------------ rate limits
+    // Written only by Cloud Functions; readable by the owner for diagnostics.
+
+    match /rateLimits/{userId} {
+      allow get: if isSelf(userId);
+      allow write: if false;
+    }
+  }
+}

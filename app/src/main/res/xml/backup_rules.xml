@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Legacy (API 23-30) auto-backup rules.
+
+     Important: as soon as a single <include> is present, Android backs up ONLY
+     the included paths, and lint rejects every <exclude> that falls outside
+     them. So we use excludes only: everything else is backed up by default,
+     and the re-fetchable cache plus device-bound secrets stay out. -->
+<full-backup-content>
+    <!-- Cached social content is re-fetchable from Firestore; never back it up. -->
+    <exclude domain="database" path="insangram.db" />
+    <exclude domain="database" path="insangram.db-shm" />
+    <exclude domain="database" path="insangram.db-wal" />
+    <!-- Keystore-wrapped values are device bound and useless off-device. -->
+    <exclude domain="sharedpref" path="insangram_secure_prefs.xml" />
+    <!-- Media scratch files and image caches. -->
+    <exclude domain="file" path="insangram_media" />
+    <exclude domain="external" path="insangram_media" />
+</full-backup-content>

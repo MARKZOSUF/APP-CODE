@@ -1,0 +1,54 @@
+# =========================
+# Android / Gradle
+# =========================
+.externalNativeBuild/
+.cxx/
+.gradle/
+build/
+**/build/
+local.properties
+
+# =========================
+# Firebase secrets
+# =========================
+app/google-services.json
+**/google-services.json
+**/serviceAccountKey.json
+firebase/.firebaserc
+
+# =========================
+# Signing / Keystore
+# =========================
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+!.env.example
+secrets/
+secrets.json
+
+# =========================
+# Node.js
+# =========================
+node_modules/
+functions/node_modules/
+functions/lib/
+
+# =========================
+# IDE
+# =========================
+.idea/
+*.iml
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db

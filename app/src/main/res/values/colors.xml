@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand ramp sampled from the supplied Insangram logo -->
+    <color name="insangram_purple">#8A2BE2</color>
+    <color name="insangram_violet">#A644F0</color>
+    <color name="insangram_magenta">#E1306C</color>
+    <color name="insangram_pink">#FF3D77</color>
+    <color name="insangram_orange">#FF7A3D</color>
+    <color name="insangram_amber">#FF9F1C</color>
+    <color name="insangram_yellow">#FFCF33</color>
+
+    <color name="insangram_black">#000000</color>
+    <color name="insangram_near_black">#0A080E</color>
+    <color name="insangram_surface_dark">#121016</color>
+    <color name="insangram_surface_light">#FFFFFF</color>
+    <color name="insangram_background_light">#FBF9FC</color>
+
+    <color name="insangram_launcher_background">#0A080E</color>
+</resources>

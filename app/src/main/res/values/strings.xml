@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- app_name is supplied per flavor via resValue in app/build.gradle.kts -->
+    <string name="brand_name">Insangram</string>
+    <string name="brand_tagline">Connect. Share. Discover.</string>
+
+    <string name="cd_insangram_logo">Insangram logo</string>
+    <string name="cd_notifications">Notifications</string>
+    <string name="cd_messages">Messages</string>
+    <string name="cd_like">Like</string>
+    <string name="cd_unlike">Remove like</string>
+    <string name="cd_comment">Comment</string>
+    <string name="cd_share">Share</string>
+    <string name="cd_save">Save</string>
+    <string name="cd_unsave">Remove from saved</string>
+    <string name="cd_more_options">More options</string>
+    <string name="cd_back">Back</string>
+    <string name="cd_close">Close</string>
+    <string name="cd_profile_picture">Profile picture of %1$s</string>
+    <string name="cd_post_media">Post media. %1$s</string>
+    <string name="cd_no_alt_text">No description provided by the author</string>
+    <string name="cd_story_unseen">Unseen story from %1$s</string>
+    <string name="cd_story_seen">Story from %1$s, already seen</string>
+    <string name="cd_play">Play</string>
+    <string name="cd_pause">Pause</string>
+    <string name="cd_mute">Mute</string>
+    <string name="cd_unmute">Unmute</string>
+
+    <string name="nav_home">Home</string>
+    <string name="nav_search">Search</string>
+    <string name="nav_create">Create</string>
+    <string name="nav_reels">Reels</string>
+    <string name="nav_profile">Profile</string>
+
+    <string name="action_continue">Continue</string>
+    <string name="action_skip">Skip</string>
+    <string name="action_retry">Try again</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_confirm">Confirm</string>
+    <string name="action_login">Log in</string>
+    <string name="action_register">Create account</string>
+    <string name="action_logout">Log out</string>
+
+    <string name="notif_channel_social_name">Social activity</string>
+    <string name="notif_channel_social_desc">Likes, comments, mentions and new followers</string>
+    <string name="notif_channel_messages_name">Direct messages</string>
+    <string name="notif_channel_messages_desc">New messages in your conversations</string>
+    <string name="notif_channel_follows_name">Followers</string>
+    <string name="notif_channel_follows_desc">New followers and follow requests</string>
+    <string name="notif_channel_uploads_name">Uploads</string>
+    <string name="notif_channel_uploads_desc">Progress for posts, reels and stories you upload</string>
+
+    <string name="disclaimer_short">Insangram is an independent educational project. It is not affiliated with, endorsed by, or connected to Instagram or Meta Platforms, Inc.</string>
+    <string name="notification_hidden_preview">New activity on Insangram</string>
+</resources>

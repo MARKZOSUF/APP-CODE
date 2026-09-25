@@ -1,0 +1,90 @@
+rules_version = '2';
+
+// Insangram Cloud Storage rules.
+//
+// Every write is scoped to a path the caller owns, and size/content-type are
+// validated before the byte stream is accepted. Reads require authentication;
+// per-user visibility is enforced by the Firestore document that points at the
+// file, which is the layer that knows about private accounts and blocks.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/(jpeg|png|webp|heic|heif)');
+    }
+
+    function isVideo() {
+      return request.resource.contentType.matches('video/(mp4|webm|quicktime)');
+    }
+
+    function underImageLimit() {
+      return request.resource.size <= 8 * 1024 * 1024;
+    }
+
+    function underVideoLimit() {
+      return request.resource.size <= 120 * 1024 * 1024;
+    }
+
+    function isConversationMember(conversationId) {
+      return signedIn() && request.auth.uid in
+        firestore.get(/databases/(default)/documents/conversations/$(conversationId)).data.memberIds;
+    }
+
+    // ------------------------------------------------------------ profile
+
+    match /users/{userId}/profile/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId) && isImage() && underImageLimit();
+      allow delete: if isOwner(userId);
+    }
+
+    // ------------------------------------------------------------ posts
+
+    match /users/{userId}/posts/{postId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId)
+        && ((isImage() && underImageLimit()) || (isVideo() && underVideoLimit()));
+      allow delete: if isOwner(userId);
+    }
+
+    // ------------------------------------------------------------ reels
+
+    match /users/{userId}/reels/{reelId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId)
+        && ((isVideo() && underVideoLimit()) || (isImage() && underImageLimit()));
+      allow delete: if isOwner(userId);
+    }
+
+    // ------------------------------------------------------------ stories
+
+    match /users/{userId}/stories/{storyId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId)
+        && ((isImage() && underImageLimit()) || (isVideo() && underVideoLimit()));
+      allow delete: if isOwner(userId);
+    }
+
+    // ------------------------------------------------------------ messages
+    // Only members of the conversation may upload into it, and only members
+    // may read it back.
+
+    match /conversations/{conversationId}/messages/{messageId}/{fileName} {
+      allow read: if isConversationMember(conversationId);
+      allow write: if isConversationMember(conversationId)
+        && ((isImage() && underImageLimit()) || (isVideo() && underVideoLimit()));
+      allow delete: if isConversationMember(conversationId);
+    }
+
+    // Anything not matched above is denied: there is no catch-all allow rule.
+  }
+}

@@ -1,0 +1,43 @@
+rules_version = '2';
+
+// Storage rules matching the exact upload paths the app uses:
+//   posts/{uid}/{postId}/{index}
+//   avatars/{uid}/profile.jpg
+//   stories/{uid}/{storyId}
+//   chats/{conversationId}/{timestamp}
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function underSizeLimit() { return request.resource.size < 50 * 1024 * 1024; }
+    function isMedia() {
+      return request.resource.contentType.matches('image/.*') ||
+             request.resource.contentType.matches('video/.*');
+    }
+
+    match /posts/{userId}/{postId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && uid() == userId && underSizeLimit() && isMedia();
+    }
+
+    match /avatars/{userId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && uid() == userId && underSizeLimit() && isMedia();
+    }
+
+    match /stories/{userId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && uid() == userId && underSizeLimit() && isMedia();
+    }
+
+    match /chats/{conversationId}/{fileName} {
+      allow read, write: if signedIn() && underSizeLimit() && isMedia();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

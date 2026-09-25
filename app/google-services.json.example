@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "TEMPLATE ONLY - contains no real credentials.",
+    "Replace every REPLACE_ME value with the values from your own Firebase",
+    "project, then save this file as app/google-services.json.",
+    "Never commit the real google-services.json or a service-account key."
+  ],
+  "project_info": {
+    "project_number": "REPLACE_ME_PROJECT_NUMBER",
+    "project_id": "REPLACE_ME_PROJECT_ID",
+    "storage_bucket": "REPLACE_ME_PROJECT_ID.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:REPLACE_ME_PROJECT_NUMBER:android:REPLACE_ME_APP_HASH",
+        "android_client_info": {
+          "package_name": "com.insangram.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REPLACE_ME_ANDROID_API_KEY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
